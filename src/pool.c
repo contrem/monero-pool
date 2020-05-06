@@ -141,6 +141,7 @@ typedef struct config_t
     char wallet_rpc_host[MAX_HOST];
     uint16_t wallet_rpc_port;
     char pool_wallet[ADDRESS_MAX];
+    char fee_wallet[ADDRESS_MAX];
     uint64_t pool_start_diff;
     double share_mul;
     uint32_t retarget_time;
@@ -750,6 +751,7 @@ payout_block(block_t *block, MDB_txn *parent)
     MDB_cursor *cursor;
     uint64_t height = block->height;
     uint64_t total_paid = 0;
+    const char *fee_wallet = *config.fee_wallet ? config.fee_wallet : NULL;
     if ((rc = mdb_txn_begin(env, parent, 0, &txn)) != 0)
     {
         err = mdb_strerror(rc);
@@ -795,6 +797,19 @@ payout_block(block_t *block, MDB_txn *parent)
             amount = block->reward - total_paid;
         total_paid += amount;
         uint64_t fee = amount * config.pool_fee;
+
+        if (fee_wallet) {
+            rc = balance_add(fee_wallet, fee, txn);
+            if (rc != 0)
+            {
+                err = mdb_strerror(rc);
+                log_error("%s", err);
+                mdb_cursor_close(cursor);
+                mdb_txn_abort(txn);
+                return rc;
+            }
+        }
+
         amount -= fee;
         if (amount == 0)
             continue;
@@ -3569,6 +3584,10 @@ read_config(const char *config_file)
         {
             strncpy(config.pool_wallet, val, sizeof(config.pool_wallet)-1);
         }
+        else if (strcmp(key, "fee-wallet") == 0)
+        {
+            strncpy(config.fee_wallet, val, sizeof(config.fee_wallet)-1);
+        }
         else if (strcmp(key, "pool-start-diff") == 0)
         {
             config.pool_start_diff = strtoumax(val, NULL, 10);
@@ -3671,6 +3690,12 @@ read_config(const char *config_file)
         log_fatal("Invalid pool wallet");
         exit(-1);
     }
+    if (*config.fee_wallet
+        && parse_address(config.fee_wallet, NULL, &nettype, &pub_spend[0]))
+    {
+        log_fatal("Invalid fee wallet");
+        exit(-1);
+    }
     if (!config.wallet_rpc_host[0] || config.wallet_rpc_port == 0)
     {
         log_fatal("Both wallet-rpc-host and wallet-rpc-port need setting. "
@@ -3729,6 +3754,7 @@ static void print_config()
         "  wallet-rpc-port = %u\n"
         "  rpc-timeout = %u\n"
         "  pool-wallet = %s\n"
+        "  fee-wallet = %s\n"
         "  pool-start-diff = %"PRIu64"\n"
         "  pool-fee = %.3f\n"
         "  payment-threshold = %.2f\n"
@@ -3757,6 +3783,7 @@ static void print_config()
         config.wallet_rpc_port,
         config.rpc_timeout,
         config.pool_wallet,
+        config.fee_wallet,
         config.pool_start_diff,
         config.pool_fee,
         config.payment_threshold,
