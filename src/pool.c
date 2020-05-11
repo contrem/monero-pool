@@ -2032,10 +2032,22 @@ send_payments(void)
     if (*config.upstream_host)
         return 0;
     uint64_t threshold = 1000000000000 * config.payment_threshold;
-    int rc;
+    int rc = 0;
     char *err;
     MDB_txn *txn;
     MDB_cursor *cursor;
+
+    size_t payments_count = 0;
+    size_t payments_max_count = 25;
+    size_t payments_size = payments_max_count * sizeof(payment_t);
+    payment_t *payments = (payment_t*) calloc(1, payments_size);
+
+    if (!payments)
+    {
+        log_error("send_payments: OOM: alloc payments");
+        return -1;
+    }
+
     if ((rc = mdb_txn_begin(env, NULL, MDB_RDONLY, &txn)) != 0)
     {
         err = mdb_strerror(rc);
@@ -2050,10 +2062,6 @@ send_payments(void)
         return rc;
     }
 
-    size_t payments_count = 0;
-    size_t payments_max_count = 25;
-    size_t payments_size = payments_max_count * sizeof(payment_t);
-    payment_t *payments = (payment_t*) calloc(1, payments_size);
     payment_t *payment = payments;
     payment_t *end_payment = payment + payments_max_count;
 
@@ -2082,7 +2090,17 @@ send_payments(void)
         if (++payment == end_payment)
         {
             payments_size <<= 1;
-            payments = (payment_t*) realloc(payments, payments_size);
+            void * const t = realloc(payments, payments_size);
+
+            if (!t)
+            {
+                log_error("send_payments: OOM: realloc payments");
+                rc = -1;
+                payments_count = 0;
+                break;
+            }
+
+            payments = (payment_t*) t;
             payment = payments + payments_max_count;
             memset(payment, 0, sizeof(payment_t) * payments_max_count);
             payments_max_count <<= 1;
@@ -2122,7 +2140,7 @@ send_payments(void)
     else
         free(payments);
 
-    return 0;
+    return rc;
 }
 
 static void
